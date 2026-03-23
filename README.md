@@ -477,14 +477,106 @@ Legacy branching-flow-only models and unrelated code paths are omitted.
 - Branching Flows: <https://arxiv.org/abs/2511.09465>
 - Flowception: <https://arxiv.org/abs/2512.11438>
 
-## Addendum: structured reveal-order loss
+## Addendum: structured reveal-order insertion loss
 
-The current structured reveal-order setup introduces a theoretical issue in the insertion loss.
+Let $x$ denote the current visible state at global time $t$, and let $s$ index the current physical insertion slots of $x$. In directional Flowception, these are:
 
-For the independent reveal-order bridge, the insertion target used by Flowception is a count target. This is valid because, conditioned on `X1` and the sampled bridge state, each hidden residue in a slot contributes the same insertion hazard. The conditional slot rate is therefore a scalar hazard multiplied by the number of hidden residues in that slot. The count target is a linear parameterization of the conditional generator, so the standard Flowception insertion loss matches the Generator Matching construction.
+- the slot before the first visible residue in a group,
+- the interior gaps between adjacent visible residues in a group,
+- the slot after the last visible residue in a group.
 
-For the structured reveal-order bridge used here, the bridge first samples a latent reveal order and then samples reveal times conditional on that order. After that latent order has been sampled, the next insertion event in a group is no longer distributed uniformly over all hidden residues in the slot. The next event is concentrated on the next residue in the sampled reveal order. The current implementation still trains against cumulative hidden counts in each slot, so the target does not match the sampled conditional generator of the structured bridge.
+The insertion head predicts rates for these physical slots through the directional left/right parameterization. The independent reveal-order bridge and the structured reveal-order bridge differ in the conditional slot generator that the loss should match.
 
-The clean fix is to keep the structured reveal-order bridge and change the insertion target. For each group, the target should place mass on the slot of the next unrevealed residue in the sampled reveal order, scaled by the number of hidden residues still remaining in that group. In the directional parameterization, this becomes a left/right target on the sides adjacent to that next slot. The independent reveal-order case can keep the original count target.
+### Independent reveal order
 
-This issue affects the theoretical interpretation of the current structured reveal-order loss. It does not affect the local-time construction itself. The local-time part of Flowception is still the mechanism that makes middle-out denoising possible once a reveal order has been specified.
+For the independent bridge, if slot $s$ contains $n_s(x)$ hidden residues of the target, then each of those residues contributes the same reveal hazard. The conditional slot rate has the form
+
+$$
+\lambda_s(x, t) = \rho(t)\, n_s(x),
+$$
+
+where $\rho(t)$ is the scalar scheduler hazard. The standard Flowception count target is therefore valid, because $n_s(x)$ is a linear parameterization of the conditional generator.
+
+### Structured reveal order
+
+For the structured bridge used here, a latent reveal order is sampled inside each group. Once that latent order has been sampled, the next reveal event in the group is no longer spread uniformly over all hidden residues in the current slot. It is concentrated on the next hidden residue in that latent order.
+
+Let $H_g(x)$ be the hidden residues that remain in group $g$ at state $x$, and let
+
+$$
+r_g(x) = |H_g(x)|.
+$$
+
+Let $J_g$ denote the next hidden residue in the sampled latent order for group $g$, and let
+
+$$
+\operatorname{slot}(j; x)
+$$
+
+map a hidden residue $j$ to its current physical insertion slot in $x$.
+
+The current implementation still uses the independent count target. That target does not match the conditional generator induced by the structured bridge.
+
+### Sparse fix
+
+The direct repair is to keep the structured bridge and change the insertion target. Conditional on the sampled latent order, the slot target for group $g$ should be
+
+$$
+y^{\mathrm{sparse}}_{g,s}(x, J_g) =
+r_g(x)\,\mathbf{1}\!\left\{\operatorname{slot}(J_g; x) = s\right\}.
+$$
+
+Summing over groups gives the full target
+
+$$
+y^{\mathrm{sparse}}_s(x) = \sum_g y^{\mathrm{sparse}}_{g,s}(x, J_g).
+$$
+
+This target places all mass on the current physical slot that contains the next hidden residue in the sampled reveal order, scaled by the number of hidden residues still remaining in that group.
+
+This is the simplest correction. It matches the sampled conditional generator, but it is sparse: each group contributes supervision to only one slot.
+
+### Rao-Blackwellized fix
+
+The current `SeededRevealOrder` implementation samples the next revealed residue in a group by adding independent Gumbel noise to a deterministic score for each remaining hidden residue and taking the minimum. For the current visible state $x$, this gives a tractable conditional distribution over the next revealed residue.
+
+Let $a_g(j; x)$ be the current reveal score for hidden residue $j \in H_g(x)$, and let $\tau$ be the reveal temperature. Then
+
+$$
+p_g(j \mid x)
+\propto
+\exp\!\left(-\frac{a_g(j; x)}{\tau}\right),
+\qquad j \in H_g(x),
+$$
+
+with the usual zero-temperature limit giving the deterministic argmin rule.
+
+The Rao-Blackwellized target marginalizes over the latent next residue instead of sampling a single one:
+
+$$
+y^{\mathrm{RB}}_{g,s}(x)
+=
+r_g(x)\sum_{j \in H_g(x)}
+p_g(j \mid x)\,
+\mathbf{1}\!\left\{\operatorname{slot}(j; x) = s\right\},
+$$
+
+and
+
+$$
+y^{\mathrm{RB}}_s(x) = \sum_g y^{\mathrm{RB}}_{g,s}(x).
+$$
+
+This is the same conditional generator parameter, but averaged over the latent next-residue choice. It is denser and lower-variance than the sparse fix.
+
+In the zero-temperature limit, the Rao-Blackwellized target reduces to the sparse fix.
+
+### Directional parameterization
+
+The model does not predict residue identities. It predicts rates for physical slots through directional token-side heads. The corrected target should therefore be constructed at the level of physical slots, and the loss should compare those slot targets to the physical slot rates implied by the directional pooling:
+
+- left boundary slot: the left head of the first visible residue,
+- interior slot: the pooled rate from the right head of residue $i$ and the left head of residue $i+1$,
+- right boundary slot: the right head of the last visible residue.
+
+The independent reveal-order case can keep the original count target. The structured reveal-order case should use either the sparse target above or the Rao-Blackwellized target.
