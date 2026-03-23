@@ -476,3 +476,15 @@ Legacy branching-flow-only models and unrelated code paths are omitted.
 
 - Branching Flows: <https://arxiv.org/abs/2511.09465>
 - Flowception: <https://arxiv.org/abs/2512.11438>
+
+## Addendum: structured reveal-order loss
+
+The current structured reveal-order setup introduces a theoretical issue in the insertion loss.
+
+For the independent reveal-order bridge, the insertion target used by Flowception is a count target. This is valid because, conditioned on `X1` and the sampled bridge state, each hidden residue in a slot contributes the same insertion hazard. The conditional slot rate is therefore a scalar hazard multiplied by the number of hidden residues in that slot. The count target is a linear parameterization of the conditional generator, so the standard Flowception insertion loss matches the Generator Matching construction.
+
+For the structured reveal-order bridge used here, the bridge first samples a latent reveal order and then samples reveal times conditional on that order. After that latent order has been sampled, the next insertion event in a group is no longer distributed uniformly over all hidden residues in the slot. The next event is concentrated on the next residue in the sampled reveal order. The current implementation still trains against cumulative hidden counts in each slot, so the target does not match the sampled conditional generator of the structured bridge.
+
+The clean fix is to keep the structured reveal-order bridge and change the insertion target. For each group, the target should place mass on the slot of the next unrevealed residue in the sampled reveal order, scaled by the number of hidden residues still remaining in that group. In the directional parameterization, this becomes a left/right target on the sides adjacent to that next slot. The independent reveal-order case can keep the original count target.
+
+This issue affects the theoretical interpretation of the current structured reveal-order loss. It does not affect the local-time construction itself. The local-time part of Flowception is still the mechanism that makes middle-out denoising possible once a reveal order has been specified.
