@@ -2,8 +2,10 @@ using Pkg
 const PROJECT_ROOT = abspath(joinpath(@__DIR__, ".."))
 const FLOW_ROOT = abspath(joinpath(PROJECT_ROOT, ".."))
 const BRANCHINGFLOWS_PATH = joinpath(FLOW_ROOT, "BranchingFlows-component-cmask")
+const ZYGOTE_PATH = joinpath(FLOW_ROOT, "Zygote-jl-1.12-fix")
 Pkg.activate(PROJECT_ROOT)
 Pkg.develop(path = BRANCHINGFLOWS_PATH)
+Pkg.develop(path = ZYGOTE_PATH)
 
 using MiddleOutProteinDesign
 using Flux, Distributions, Dates
@@ -12,7 +14,7 @@ using LearningSchedules
 using CannotWaitForTheseOptimisers: Muon
 using JLD2: jldsave
 
-ENV["CUDA_VISIBLE_DEVICES"] = get(ENV, "CUDA_VISIBLE_DEVICES", "1")
+ENV["CUDA_VISIBLE_DEVICES"] = get(ENV, "CUDA_VISIBLE_DEVICES", "0")
 using CUDA, cuDNN
 device!(0)
 device = gpu
@@ -24,27 +26,29 @@ const sample_interval = parse(Int, get(ENV, "BRANCHCHAIN_FLOWCEPTION_SAMPLE_INTE
 const l2b_cap = parse(Int, get(ENV, "BRANCHCHAIN_FLOWCEPTION_L2B_CAP", "1500"))
 const sample_steps = parse(Int, get(ENV, "BRANCHCHAIN_FLOWCEPTION_SAMPLE_STEPS", "1000"))
 const sample_recycles = parse(Int, get(ENV, "BRANCHCHAIN_FLOWCEPTION_SAMPLE_RECYCLES", "2"))
+const train_reveal_temperature = parse(Float32, get(ENV, "BRANCHCHAIN_FLOWCEPTION_TRAIN_REVEAL_TEMPERATURE", "10"))
 const max_batches = parse(Int, get(ENV, "BRANCHCHAIN_FLOWCEPTION_MAX_BATCHES", "0"))
-const insertion_multiplier = parse(Float32, get(ENV, "BRANCHCHAIN_FLOWCEPTION_INSERTION_MULTIPLIER", "0.025"))
+const insertion_multiplier = parse(Float32, get(ENV, "BRANCHCHAIN_FLOWCEPTION_INSERTION_MULTIPLIER", "0.05"))
 const warmdown_epoch = max(max_epochs - 1, 1)
 Flux.MLDataDevices.Internal.unsafe_free!(x) = (Flux.fmapstructure(Flux.MLDataDevices.Internal.unsafe_free_internal!, x); return nothing)
 
-struct BatchDataset{T,D,F}
+struct BatchDataset{T,D,F,P}
     batchinds::T
     dat::D
     train_ff::F
+    flow::P
 end
 
 Base.length(x::BatchDataset) = length(x.batchinds)
 function Base.getindex(x::BatchDataset, i)
-    return training_prep_flowception(x.batchinds[i], x.dat, x.train_ff; P = MiddleOutProteinDesign.P_flowception, nstart = nstart)
+    return training_prep_flowception(x.batchinds[i], x.dat, x.train_ff; P = x.flow, nstart = nstart)
 end
 
-function batchloader(dat, clusters, len_lbs, train_ff; device = identity, parallel = true)
+function batchloader(dat, clusters, len_lbs, train_ff, P_train; device = identity, parallel = true)
     uncapped_l2b = length2batch(l2b_cap, 1.25)
     batchinds = sample_batched_inds(len_lbs, clusters, l2b = x -> min(uncapped_l2b(x), 100))
     @show length(batchinds)
-    x = BatchDataset(batchinds, dat, train_ff)
+    x = BatchDataset(batchinds, dat, train_ff, P_train)
     dataloader = Flux.DataLoader(x; batchsize = -1, parallel)
     return device(dataloader)
 end
@@ -54,7 +58,7 @@ function main()
     mkpath(runs_dir)
     rundir = joinpath(runs_dir, "middleout_flowception_$(Date(now()))_$(rand(100000:999999))")
     println("rundir=$(rundir)")
-    println("settings nstart=$(nstart) epochs=$(max_epochs) thaw_batch=$(thaw_batch) sample_interval=$(sample_interval) l2b_cap=$(l2b_cap) sample_steps=$(sample_steps) sample_recycles=$(sample_recycles) max_batches=$(max_batches) insertion_multiplier=$(insertion_multiplier) reveal_temperature=$(MiddleOutProteinDesign.flowception_reveal_temperature)")
+    println("settings nstart=$(nstart) epochs=$(max_epochs) thaw_batch=$(thaw_batch) sample_interval=$(sample_interval) l2b_cap=$(l2b_cap) sample_steps=$(sample_steps) sample_recycles=$(sample_recycles) max_batches=$(max_batches) insertion_multiplier=$(insertion_multiplier) train_reveal_temperature=$(train_reveal_temperature) base_reveal_temperature=$(MiddleOutProteinDesign.flowception_reveal_temperature)")
     mkpath("$(rundir)/samples")
     mkpath("$(rundir)/vids")
 
@@ -67,7 +71,7 @@ function main()
     sampling_ff = featurizer(feature_table, CHAIN_FEATS_64)
     clusters = [pdb_clusters[c] for c in pdbid_clean.(dat.name)]
     len_lbs = dat.len
-    P_flow = MiddleOutProteinDesign.P_flowception
+    P_flow = with_reveal_temperature(MiddleOutProteinDesign.P_flowception, train_reveal_temperature)
 
     println("stage=model")
     base_model = load_model("branchchain_feat64.jld")
@@ -77,8 +81,12 @@ function main()
     opt_state = Flux.setup(Muon(eta = sched.lr, fallback = x -> any(size(x) .== 21)), model)
     if thaw_batch > 0
         Flux.freeze!(opt_state)
+        Flux.thaw!(opt_state.layers.feature_embedder)
         Flux.thaw!(opt_state.layers.branch_embedder)
         Flux.thaw!(opt_state.layers.local_t_encoding)
+        Flux.thaw!(opt_state.layers.local_t_feature_encoding)
+        Flux.thaw!(opt_state.layers.AApre_local_t_encoding)
+        Flux.thaw!(opt_state.layers.indelpre_local_t_encoding)
         Flux.thaw!(opt_state.layers.count_decoder)
     end
 
@@ -87,7 +95,7 @@ function main()
         if epoch == warmdown_epoch
             sched = linear_decay_schedule(sched.lr, 0.000000001f0, 5800)
         end
-        for (i, ts) in enumerate(batchloader(dat, clusters, len_lbs, train_ff; device = device))
+        for (i, ts) in enumerate(batchloader(dat, clusters, len_lbs, train_ff, P_flow; device = device))
             if epoch == 1 && thaw_batch > 0 && i == thaw_batch
                 Flux.thaw!(opt_state)
                 sched = burnin_learning_schedule(0.00001f0, 0.000250f0, 1.05f0, 0.999995f0)

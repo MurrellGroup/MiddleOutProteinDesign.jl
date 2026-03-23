@@ -279,20 +279,178 @@ The fourth component is:
 
 This component carries sequence/index alignment information through the variable-length construction.
 
-## Model path kept in this repository
+## Model architecture
 
-The model path kept here is:
+The trainable model in this repository is `BranchChainFlowceptionV3`.
 
-1. load the pretrained `branchchain_feat64.jld` checkpoint
-2. deserialize it into `BranchChainV3`
-3. lift it into `BranchChainFlowceptionV3`
+The model is initialized by:
 
-`BranchChainFlowceptionV3` keeps the BranchChain IPA backbone and feature-conditioning path and changes the variable-length part of the model:
+1. loading the pretrained `branchchain_feat64.jld` checkpoint
+2. deserializing that checkpoint into the fixed-length `BranchChainV3` architecture
+3. constructing `BranchChainFlowceptionV3(base_model)`
 
-- adds `local_t` conditioning
-- adds `branchmask` conditioning
-- replaces the one-sided count head with a 2-channel directional insertion head
-- trains under the Flowception bridge and Flowception loss
+The resulting model reuses the pretrained structure backbone and feature pathway and replaces the variable-length component with a Flowception-specific head and conditioning scheme.
+
+### Residue representation
+
+For each visible residue, the initial token representation is the sum of:
+
+- an amino-acid embedding
+- a design-mask embedding
+- a chain-break embedding
+- a learned embedding of the 64-dimensional conditioning features
+- a global-time feature term
+
+The global-time feature term is produced by:
+
+- dividing the scalar global time by `10`
+- applying random Fourier features
+- projecting the result with `global_t_encoding`
+
+Global time only enters the model through this bottom-level token feature bias.
+
+### Pair representation
+
+Pair features are built from:
+
+- residue indices
+- chain identities
+
+These are passed through a pairwise positional encoding, random Fourier features, and a linear projection. The resulting pair tensor is used by all IPA blocks.
+
+### Backbone
+
+The backbone contains:
+
+- `6` IPA blocks
+- `6` frame-mover blocks
+- self-conditioning cross-frame IPA blocks
+- self-conditioning self-frame IPA blocks
+
+The coordinate state is represented as rigid frames with:
+
+- a translation component
+- a rotation component
+
+At each block, the model updates residue features with IPA and updates frames with the learned frame movers. The frame-mover time argument is a function of residue-wise `local_t`, so frame evolution is controlled by local time rather than global time.
+
+### Self-conditioning
+
+The model supports recycle-based self-conditioning through `sc_frames`.
+
+Given a current partially revealed state `X_t`:
+
+- the model can first predict frames for that same `X_t`
+- those predicted frames are then fed back through the self-conditioning IPA blocks
+- the final prediction is made after the requested number of recycle passes
+
+This self-conditioning operates on the current visible state only. It does not try to align frame caches across insertion events.
+
+### Time conditioning
+
+The current time-conditioning split is:
+
+- `local_t` is the strong conditioning signal
+- `global_t` is a weak input-feature signal
+
+`local_t` enters in three places:
+
+1. `local_t_encoding(local_t_rff(local_t))` is used as the `cond` input for AdaLN inside the IPA blocks
+2. `local_t_feature_encoding(local_t_rff(local_t))` is added to the residue features before the output heads
+3. explicit local-time predecoder terms are added before both output heads:
+   - `AApre_local_t_encoding(...)`
+   - `indelpre_local_t_encoding(...)`
+
+`branchmask` is also embedded and added before the output heads. This tells the model which visible residues are still insertion-active.
+
+### Output heads
+
+The model produces three outputs:
+
+1. rigid frames for translation and rotation
+2. amino-acid logits
+3. a `2`-channel insertion head
+
+The insertion head is directional:
+
+- channel `1` predicts left insertions
+- channel `2` predicts right insertions
+
+The insertion head reads the concatenation of residue activations from backbone blocks `4`, `5`, and `6`. This is the same multi-layer readout pattern used in the original BranchChain count head, but the final head here is a new `2`-channel head rather than the old scalar count head.
+
+There is no deletion head in this model path.
+
+## Training setup
+
+The main training script is:
+
+- `scripts/train_feat64_masked_flowception.jl`
+
+The default settings in that script are:
+
+- `15` epochs
+- reveal-order temperature `10`
+- `sample_recycles = 2`
+- `sample_steps = 1000`
+- insertion multiplier `0.05`
+- `thaw_batch = 2000`
+
+### Loss
+
+The training loss contains four terms:
+
+- translation loss
+- rotation loss
+- amino-acid loss
+- directional insertion loss
+
+The weighted objective is:
+
+- `20 * l_loc`
+- `2 * l_rot`
+- `0.1 * l_aas`
+- `0.05 * l_insertions_raw`
+
+The translation, rotation, and amino-acid losses use residue-wise local times. The insertion loss is the directional Flowception insertion loss induced by the sampled reveal-order bridge.
+
+There is no deletion loss and no pairwise auxiliary loss in this repository's Flowception path.
+
+### Freeze / thaw schedule
+
+The training script freezes most of the network for the first `2000` batches and thaws only the components that are new or directly affected by the changed conditioning path:
+
+- `feature_embedder`
+- `branch_embedder`
+- `local_t_encoding`
+- `local_t_feature_encoding`
+- `AApre_local_t_encoding`
+- `indelpre_local_t_encoding`
+- `count_decoder`
+
+At batch `2000`, the full model is thawed and the burn-in schedule is restarted.
+
+### Learning-rate schedule
+
+The training script uses:
+
+- `Muon` as the optimizer
+- a burn-in learning-rate schedule at the start of training
+- the same burn-in schedule again immediately after the thaw point
+- a fixed linear warmdown that begins at the penultimate epoch
+
+### Periodic in-training samples
+
+Every `5000` batches, the training script writes:
+
+- sampled final PDBs
+- trajectory frame directories under `vids/`
+- a model checkpoint
+
+Those periodic samples use:
+
+- the same Flowception process as training
+- `recycles = 2`
+- `steps = 1000`
 
 ## Scripts
 

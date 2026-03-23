@@ -92,9 +92,10 @@ function BranchChainFlowceptionV3(dim::Int = 384, depth::Int = 6, f_depth::Int =
         break_embedder = Embedding(2 => dim),
         t_rff = RandomFourierFeatures(1 => dim, 1f0),
         local_t_rff = RandomFourierFeatures(1 => dim, 1f0),
-        cond_t_encoding = Dense(dim => dim, bias = false),
+        global_t_encoding = Dense(dim => dim, bias = false),
         local_t_encoding = Dense(dim => dim, bias = false),
-        AApre_t_encoding = Dense(dim => dim, bias = false),
+        local_t_feature_encoding = Dense(dim => dim, bias = false),
+        AApre_local_t_encoding = Dense(dim => dim, bias = false),
         pair_rff = RandomFourierFeatures(2 => 64, 1f0),
         pair_project = Dense(64 => 32, bias = false),
         AA_embedder = Embedding(21 => dim),
@@ -103,11 +104,15 @@ function BranchChainFlowceptionV3(dim::Int = 384, depth::Int = 6, f_depth::Int =
         ipa_blocks = [IPAblock(dim, IPA(IPA_settings(dim, c_z = 32)), ln1 = oldAdaLN(dim, dim), ln2 = oldAdaLN(dim, dim)) for _ in 1:depth],
         framemovers = [Framemover(dim) for _ in 1:f_depth],
         AAdecoder = Chain(StarGLU(dim, 3dim), Dense(dim => 21, bias = false)),
-        indelpre_t_encoding = Dense(dim => 3dim),
+        indelpre_local_t_encoding = Dense(dim => 3dim),
         count_decoder = StarGLU(Dense(3dim => 2dim, bias = false), Dense(2dim => 2, bias = false), Dense(3dim => 2dim, bias = false), Flux.swish),
         feature_embedder = Dense(64 => dim),
     )
     layers.local_t_encoding.weight ./= 10
+    layers.local_t_feature_encoding.weight ./= 10
+    layers.AApre_local_t_encoding.weight ./= 10
+    layers.indelpre_local_t_encoding.weight ./= 10
+    layers.global_t_encoding.weight ./= 10
     layers.branch_embedder.weight ./= 10
     return BranchChainFlowceptionV3(layers)
 end
@@ -121,8 +126,7 @@ function BranchChainFlowceptionV3(base::BranchChainV3)
         mask_embedder = base.layers.mask_embedder,
         break_embedder = base.layers.break_embedder,
         t_rff = base.layers.t_rff,
-        cond_t_encoding = base.layers.cond_t_encoding,
-        AApre_t_encoding = base.layers.AApre_t_encoding,
+        global_t_encoding = base.layers.cond_t_encoding,
         pair_rff = base.layers.pair_rff,
         pair_project = base.layers.pair_project,
         AA_embedder = base.layers.AA_embedder,
@@ -131,18 +135,9 @@ function BranchChainFlowceptionV3(base::BranchChainV3)
         ipa_blocks = base.layers.ipa_blocks,
         framemovers = base.layers.framemovers,
         AAdecoder = base.layers.AAdecoder,
-        indelpre_t_encoding = base.layers.indelpre_t_encoding,
         feature_embedder = base.layers.feature_embedder,
     )
-    base_count = base.layers.count_decoder
-    count_decoder = StarGLU(
-        deepcopy(base_count.w1),
-        Dense(size(base_count.w2.weight, 2) => 2, bias = false),
-        deepcopy(base_count.w3),
-        base_count.act,
-    )
-    count_decoder.w2.weight .= vcat(base_count.w2.weight, base_count.w2.weight)
-    lifted_layers = merge(scaffold.layers, shared_layers, (count_decoder = count_decoder,))
+    lifted_layers = merge(scaffold.layers, shared_layers)
     return BranchChainFlowceptionV3(lifted_layers)
 end
 
@@ -162,14 +157,16 @@ function (fc::BranchChainFlowceptionV3)(t, Xt::FlowceptionState, chainids, resin
     pmask = Flux.Zygote.@ignore self_att_padding_mask(Xt.padmask)
     pre_z = Flux.Zygote.@ignore l.pair_rff(pair_encode(resinds, chainids))
     pair_feats = l.pair_project(pre_z)
-    t_rff = Flux.Zygote.@ignore l.t_rff(t)
+    t_rff = Flux.Zygote.@ignore l.t_rff(t ./ 10)
     local_t_feats = Flux.Zygote.@ignore l.local_t_rff(local_t)
-    cond = reshape(l.cond_t_encoding(t_rff), :, 1, size(t, 2))
+    cond = l.local_t_encoding(local_t_feats)
+    global_t_feats = reshape(l.global_t_encoding(t_rff), :, 1, size(t, 2))
     frames = Translation(tensor(state[1])) ∘ Rotation(tensor(state[2]))
     x = l.AA_embedder(tensor(state[3])) .+
         l.mask_embedder(cmask .+ 1) .+
         reshape(l.break_embedder(breaks .+ 1), :, 1, size(t, 2)) .+
-        l.feature_embedder(chain_features .+ 0)
+        l.feature_embedder(chain_features .+ 0) .+
+        global_t_feats
     x_a, x_b, x_c = nothing, nothing, nothing
     for i in 1:l.depth
         if sc_frames !== nothing
@@ -185,15 +182,14 @@ function (fc::BranchChainFlowceptionV3)(t, Xt::FlowceptionState, chainids, resin
         i == 5 && (x_b = x)
         i == 6 && (x_c = x)
     end
-    flow_cond = l.branch_embedder(branchmask .+ 1) .+ l.local_t_encoding(local_t_feats)
+    flow_cond = l.branch_embedder(branchmask .+ 1) .+ l.local_t_feature_encoding(local_t_feats)
     x = x .+ flow_cond
     x_a = x_a .+ flow_cond
     x_b = x_b .+ flow_cond
     x_c = x_c .+ flow_cond
-    aa_logits = l.AAdecoder(x .+ reshape(l.AApre_t_encoding(t_rff), :, 1, size(t, 2)))
+    aa_logits = l.AAdecoder(x .+ l.AApre_local_t_encoding(local_t_feats))
     catted = vcat(x_a, x_b, x_c)
-    indel_pre_t = reshape(l.indelpre_t_encoding(t_rff), :, 1, size(t, 2))
-    insertion_logits = l.count_decoder(catted .+ indel_pre_t, false)
+    insertion_logits = l.count_decoder(catted .+ l.indelpre_local_t_encoding(local_t_feats), false)
     return frames, aa_logits, insertion_logits
 end
 

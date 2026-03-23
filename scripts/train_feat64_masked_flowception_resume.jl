@@ -2,8 +2,10 @@ using Pkg
 const PROJECT_ROOT = abspath(joinpath(@__DIR__, ".."))
 const FLOW_ROOT = abspath(joinpath(PROJECT_ROOT, ".."))
 const BRANCHINGFLOWS_PATH = joinpath(FLOW_ROOT, "BranchingFlows-component-cmask")
+const ZYGOTE_PATH = joinpath(FLOW_ROOT, "Zygote-jl-1.12-fix")
 Pkg.activate(PROJECT_ROOT)
 Pkg.develop(path = BRANCHINGFLOWS_PATH)
+Pkg.develop(path = ZYGOTE_PATH)
 
 using MiddleOutProteinDesign
 using Flux, Distributions, Dates
@@ -29,7 +31,7 @@ const sample_steps = parse(Int, get(ENV, "BRANCHCHAIN_FLOWCEPTION_SAMPLE_STEPS",
 const sample_recycles = parse(Int, get(ENV, "BRANCHCHAIN_FLOWCEPTION_SAMPLE_RECYCLES", "2"))
 const resume_reveal_temperature = parse(Float32, get(ENV, "BRANCHCHAIN_FLOWCEPTION_RESUME_REVEAL_TEMPERATURE", "10"))
 const max_batches = parse(Int, get(ENV, "BRANCHCHAIN_FLOWCEPTION_MAX_BATCHES", "0"))
-const insertion_multiplier = parse(Float32, get(ENV, "BRANCHCHAIN_FLOWCEPTION_INSERTION_MULTIPLIER", "0.025"))
+const insertion_multiplier = parse(Float32, get(ENV, "BRANCHCHAIN_FLOWCEPTION_INSERTION_MULTIPLIER", "0.05"))
 const warmdown_epoch = max(max_epochs - 1, 1)
 
 Flux.MLDataDevices.Internal.unsafe_free!(x) = (Flux.fmapstructure(Flux.MLDataDevices.Internal.unsafe_free_internal!, x); return nothing)
