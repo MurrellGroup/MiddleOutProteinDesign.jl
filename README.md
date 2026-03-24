@@ -510,7 +510,7 @@ $$
 Let $J_g$ denote the next hidden residue in the sampled latent order for group $g$, and let
 
 $$
-\operatorname{slot}(j; x)
+\mathrm{slot}(j; x)
 $$
 
 map a hidden residue $j$ to its current physical insertion slot in $x$.
@@ -523,7 +523,7 @@ The direct repair is to keep the structured bridge and change the insertion targ
 
 $$
 y^{\mathrm{sparse}}_{g,s}(x, J_g) =
-r_g(x)\,\mathbf{1}\!\left\{\operatorname{slot}(J_g; x) = s\right\}.
+r_g(x)\,\mathbf{1}\!\left\{\mathrm{slot}(J_g; x) = s\right\}.
 $$
 
 Summing over groups gives the full target
@@ -558,7 +558,7 @@ y^{\mathrm{RB}}_{g,s}(x)
 =
 r_g(x)\sum_{j \in H_g(x)}
 p_g(j \mid x)\,
-\mathbf{1}\!\left\{\operatorname{slot}(j; x) = s\right\},
+\mathbf{1}\!\left\{\mathrm{slot}(j; x) = s\right\},
 $$
 
 and
