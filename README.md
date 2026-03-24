@@ -522,8 +522,7 @@ The current implementation still uses the independent count target. That target 
 The direct repair is to keep the structured bridge and change the insertion target. Conditional on the sampled latent order, the slot target for group $g$ should be
 
 $$
-y^{\mathrm{sparse}}_{g,s}(x, J_g) =
-r_g(x)\,\mathbf{1}\!\left\{\mathrm{slot}(J_g; x) = s\right\}.
+y^{\mathrm{sparse}}_{g,s}(x, J_g) = r_g(x)\,\mathbf{1}[\,\mathrm{slot}(J_g; x) = s\,].
 $$
 
 Summing over groups gives the full target
@@ -554,11 +553,7 @@ with the usual zero-temperature limit giving the deterministic argmin rule.
 The Rao-Blackwellized target marginalizes over the latent next residue instead of sampling a single one:
 
 $$
-y^{\mathrm{RB}}_{g,s}(x)
-=
-r_g(x)\sum_{j \in H_g(x)}
-p_g(j \mid x)\,
-\mathbf{1}\!\left\{\mathrm{slot}(j; x) = s\right\},
+y^{\mathrm{RB}}_{g,s}(x) = r_g(x)\sum_{j \in H_g(x)} p_g(j \mid x)\,\mathbf{1}[\,\mathrm{slot}(j; x) = s\,].
 $$
 
 and
