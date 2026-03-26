@@ -21,12 +21,13 @@ device = gpu
 
 const nstart = parse(Int, get(ENV, "BRANCHCHAIN_FLOWCEPTION_NSTART", "2"))
 const max_epochs = parse(Int, get(ENV, "BRANCHCHAIN_FLOWCEPTION_EPOCHS", "15"))
-const thaw_batch = parse(Int, get(ENV, "BRANCHCHAIN_FLOWCEPTION_THAW_BATCH", "2000"))
+const thaw_batch = parse(Int, get(ENV, "BRANCHCHAIN_FLOWCEPTION_THAW_BATCH", "5000"))
 const sample_interval = parse(Int, get(ENV, "BRANCHCHAIN_FLOWCEPTION_SAMPLE_INTERVAL", "5000"))
 const l2b_cap = parse(Int, get(ENV, "BRANCHCHAIN_FLOWCEPTION_L2B_CAP", "1500"))
 const sample_steps = parse(Int, get(ENV, "BRANCHCHAIN_FLOWCEPTION_SAMPLE_STEPS", "1000"))
 const sample_recycles = parse(Int, get(ENV, "BRANCHCHAIN_FLOWCEPTION_SAMPLE_RECYCLES", "2"))
 const train_reveal_temperature = parse(Float32, get(ENV, "BRANCHCHAIN_FLOWCEPTION_TRAIN_REVEAL_TEMPERATURE", "10"))
+const train_target_mode = get(ENV, "BRANCHCHAIN_FLOWCEPTION_TRAIN_TARGET_MODE", "rb")
 const max_batches = parse(Int, get(ENV, "BRANCHCHAIN_FLOWCEPTION_MAX_BATCHES", "0"))
 const insertion_multiplier = parse(Float32, get(ENV, "BRANCHCHAIN_FLOWCEPTION_INSERTION_MULTIPLIER", "0.05"))
 const warmdown_epoch = max(max_epochs - 1, 1)
@@ -58,7 +59,7 @@ function main()
     mkpath(runs_dir)
     rundir = joinpath(runs_dir, "middleout_flowception_$(Date(now()))_$(rand(100000:999999))")
     println("rundir=$(rundir)")
-    println("settings nstart=$(nstart) epochs=$(max_epochs) thaw_batch=$(thaw_batch) sample_interval=$(sample_interval) l2b_cap=$(l2b_cap) sample_steps=$(sample_steps) sample_recycles=$(sample_recycles) max_batches=$(max_batches) insertion_multiplier=$(insertion_multiplier) train_reveal_temperature=$(train_reveal_temperature) base_reveal_temperature=$(MiddleOutProteinDesign.flowception_reveal_temperature)")
+    println("settings nstart=$(nstart) epochs=$(max_epochs) thaw_batch=$(thaw_batch) sample_interval=$(sample_interval) l2b_cap=$(l2b_cap) sample_steps=$(sample_steps) sample_recycles=$(sample_recycles) max_batches=$(max_batches) insertion_multiplier=$(insertion_multiplier) train_reveal_temperature=$(train_reveal_temperature) train_target_mode=$(train_target_mode) base_reveal_temperature=$(MiddleOutProteinDesign.flowception_reveal_temperature)")
     mkpath("$(rundir)/samples")
     mkpath("$(rundir)/vids")
 
@@ -71,7 +72,11 @@ function main()
     sampling_ff = featurizer(feature_table, CHAIN_FEATS_64)
     clusters = [pdb_clusters[c] for c in pdbid_clean.(dat.name)]
     len_lbs = dat.len
-    P_flow = with_reveal_temperature(MiddleOutProteinDesign.P_flowception, train_reveal_temperature)
+    P_flow = with_reveal_settings(
+        MiddleOutProteinDesign.P_flowception;
+        temperature = train_reveal_temperature,
+        target = MiddleOutProteinDesign.parse_reveal_target_mode(train_target_mode),
+    )
 
     println("stage=model")
     base_model = load_model("branchchain_feat64.jld")
@@ -81,6 +86,8 @@ function main()
     opt_state = Flux.setup(Muon(eta = sched.lr, fallback = x -> any(size(x) .== 21)), model)
     if thaw_batch > 0
         Flux.freeze!(opt_state)
+        Flux.thaw!(opt_state.layers.t_rff)
+        Flux.thaw!(opt_state.layers.global_t_encoding)
         Flux.thaw!(opt_state.layers.feature_embedder)
         Flux.thaw!(opt_state.layers.branch_embedder)
         Flux.thaw!(opt_state.layers.local_t_encoding)

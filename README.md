@@ -4,6 +4,29 @@ Adapted from [BranchChain.jl](https://github.com/MurrellGroup/BranchChain.jl).
 
 `MiddleOutProteinDesign.jl` is a protein-design package built around a Flowception-style variable-length generator with controlled reveal order.
 
+## Required BranchingFlows branch
+
+This repository expects the sibling `BranchingFlows.jl` checkout at
+
+`../BranchingFlows-component-cmask`
+
+to be on branch
+
+`spatial-reveal-order`
+
+because that branch contains the structured Flowception reveal-order targets
+used here:
+
+- `CountRevealTarget()`
+- `SparseRevealTarget()`
+- `RaoBlackwellizedRevealTarget()`
+
+The current training scripts rely on that branch for:
+
+- `SeededRevealOrder(...)`
+- the Rao-Blackwellized reveal target default
+- the directional structured-target bridge and loss
+
 Main references:
 
 - Flowception paper: <https://arxiv.org/abs/2512.11438>

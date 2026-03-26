@@ -151,13 +151,26 @@ function load_model(checkpoint)
     return JLD2.load(file, "model_state")
 end
 
-function with_reveal_temperature(P::DirectionalFlowceptionFlow, temperature::Float32)
+function parse_reveal_target_mode(mode::AbstractString)
+    normalized = lowercase(strip(mode))
+    if normalized in ("count", "counts", "legacy")
+        return CountRevealTarget()
+    elseif normalized in ("sparse", "next-slot", "next_slot")
+        return SparseRevealTarget()
+    elseif normalized in ("rb", "rao-blackwell", "rao_blackwell", "rao-blackwellized", "rao_blackwellized")
+        return RaoBlackwellizedRevealTarget()
+    end
+    error("Unknown reveal target mode `$mode`. Use `count`, `sparse`, or `rb`.")
+end
+
+function with_reveal_settings(P::DirectionalFlowceptionFlow; temperature::Union{Nothing, Float32} = nothing, target = nothing)
     ro = P.reveal_order
     ro isa SeededRevealOrder || return P
     tuned_ro = SeededRevealOrder(
-        temperature = temperature,
+        temperature = something(temperature, ro.temperature),
         seed_priority = ro.seed_priority,
         reveal_priority = ro.reveal_priority,
+        target = something(target, ro.target),
     )
     return DirectionalFlowceptionFlow(
         P.P,
@@ -170,3 +183,5 @@ function with_reveal_temperature(P::DirectionalFlowceptionFlow, temperature::Flo
         reveal_order = tuned_ro,
     )
 end
+
+with_reveal_temperature(P::DirectionalFlowceptionFlow, temperature::Float32) = with_reveal_settings(P; temperature)

@@ -30,6 +30,7 @@ const l2b_cap = parse(Int, get(ENV, "BRANCHCHAIN_FLOWCEPTION_L2B_CAP", "1500"))
 const sample_steps = parse(Int, get(ENV, "BRANCHCHAIN_FLOWCEPTION_SAMPLE_STEPS", "1000"))
 const sample_recycles = parse(Int, get(ENV, "BRANCHCHAIN_FLOWCEPTION_SAMPLE_RECYCLES", "2"))
 const resume_reveal_temperature = parse(Float32, get(ENV, "BRANCHCHAIN_FLOWCEPTION_RESUME_REVEAL_TEMPERATURE", "10"))
+const resume_target_mode = get(ENV, "BRANCHCHAIN_FLOWCEPTION_RESUME_TARGET_MODE", "rb")
 const max_batches = parse(Int, get(ENV, "BRANCHCHAIN_FLOWCEPTION_MAX_BATCHES", "0"))
 const insertion_multiplier = parse(Float32, get(ENV, "BRANCHCHAIN_FLOWCEPTION_INSERTION_MULTIPLIER", "0.05"))
 const warmdown_epoch = max(max_epochs - 1, 1)
@@ -87,7 +88,7 @@ function main()
         "settings checkpoint=$(resume_checkpoint) resume_epoch=$(resume_epoch) resume_batch=$(resume_batch) " *
         "nstart=$(nstart) epochs=$(max_epochs) sample_interval=$(sample_interval) l2b_cap=$(l2b_cap) " *
         "sample_steps=$(sample_steps) sample_recycles=$(sample_recycles) resume_reveal_temperature=$(resume_reveal_temperature) " *
-        "max_batches=$(max_batches) insertion_multiplier=$(insertion_multiplier) base_reveal_temperature=$(MiddleOutProteinDesign.flowception_reveal_temperature)"
+        "resume_target_mode=$(resume_target_mode) max_batches=$(max_batches) insertion_multiplier=$(insertion_multiplier) base_reveal_temperature=$(MiddleOutProteinDesign.flowception_reveal_temperature)"
     )
     mkpath("$(rundir)/samples")
     mkpath("$(rundir)/vids")
@@ -101,7 +102,11 @@ function main()
     sampling_ff = featurizer(feature_table, CHAIN_FEATS_64)
     clusters = [pdb_clusters[c] for c in pdbid_clean.(dat.name)]
     len_lbs = dat.len
-    P_train = with_reveal_temperature(MiddleOutProteinDesign.P_flowception, resume_reveal_temperature)
+    P_train = with_reveal_settings(
+        MiddleOutProteinDesign.P_flowception;
+        temperature = resume_reveal_temperature,
+        target = MiddleOutProteinDesign.parse_reveal_target_mode(resume_target_mode),
+    )
 
     println("stage=model")
     model = load_resume_model(resume_checkpoint) |> device

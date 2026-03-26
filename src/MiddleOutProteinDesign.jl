@@ -39,6 +39,7 @@ export BranchChainV3,
     step_spec,
     textlog,
     training_prep_flowception,
+    with_reveal_settings,
     with_reveal_temperature,
     X1_from_pdb
 
