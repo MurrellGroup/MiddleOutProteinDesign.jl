@@ -543,7 +543,7 @@ $$
 
 map a hidden residue $j$ to its current physical insertion slot in $x$.
 
-The current implementation still uses the independent count target. That target does not match the conditional generator induced by the structured bridge.
+A naive implementation with an independent count target would not match the conditional generator induced by the structured bridge.
 
 ### Sparse fix
 
