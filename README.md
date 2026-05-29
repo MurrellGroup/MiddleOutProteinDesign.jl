@@ -1,6 +1,9 @@
 # MiddleOutProteinDesign.jl
 
-Adapted from [BranchChain.jl](https://github.com/MurrellGroup/BranchChain.jl).
+> [!IMPORTANT]
+> This repo is for a project that is under active develpoment. Do not expect this to just work if you install it.
+
+Model adapted from [BranchChain.jl](https://github.com/MurrellGroup/BranchChain.jl), but the framework should apply to any model.
 
 `MiddleOutProteinDesign.jl` is a protein-design package built around a Flowception-style variable-length generator with controlled reveal order.
 
@@ -30,8 +33,8 @@ The current training scripts rely on that branch for:
 Main references:
 
 - Flowception paper: <https://arxiv.org/abs/2512.11438>
-- Flowception project page: <https://flowception-meta.github.io/>
-- Branching Flows paper: <https://arxiv.org/abs/2511.09465>
+- Latent Process Generator Matching (to handle Flowception extensions): <https://arxiv.org/abs/2605.20547>
+- Branching Flows paper (from original BranchChain repo): <https://arxiv.org/abs/2511.09465>
 
 ## Project goals
 
@@ -42,6 +45,8 @@ This repository targets two modeling goals.
 
 2. Interface-first construction for conditional design.
    In binder design, fixed conditioned residues can identify a binding interface or other anchored context. The reveal-order bridge can expose nearby designable residues early and leave the rest of the binder to be scaffolded around that resolved local context.
+
+Note: by using a modified Flowception approach we get control over the ordering of element resolution, and we get variable-length generation. If you have architecture constraints that require fixed-length tensors, you can condition on a total length, and you can keep all unmaterialized elements (that are not actively flowing) as "virtual" elements, retaining them in the model pass even though they cannot yet flow.
 
 ## Flowception in this repository
 
